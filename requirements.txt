@@ -27,6 +27,7 @@ pandas
 # extras --------------------------------------
 thop==0.0.31.post2005241907  # FLOPS computation
 pycocotools>=2.0  # COCO mAP
-
+mindspore>=1.7    # Huawei MindSpore
+scikit-image>=0.17.2  # image matching
 #results
 xlsxwriter>=3.0.1

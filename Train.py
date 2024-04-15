@@ -78,7 +78,7 @@ def train(hyp, opt, device, tb_writer=None):
     loggers = {'wandb': None}  # loggers dict
     if rank in [-1, 0]:
         opt.hyp = hyp  # add hyperparameters
-        run_id = torch.load(weights).get('wandb_id') if weights.endswith('.pt') and os.path.isfile(weights) else None
+        run_id = torch.load(weights).get('wandb_id') if (weights.endswith('.pt') or weights.endswith('.pth')) and os.path.isfile(weights) else None
         wandb_logger = WandbLogger(opt, Path(opt.save_dir).stem, run_id, data_dict)
         loggers['wandb'] = wandb_logger.wandb
         data_dict = wandb_logger.data_dict
@@ -90,16 +90,20 @@ def train(hyp, opt, device, tb_writer=None):
     assert len(names) == nc, '%g names found for nc=%g dataset in %s' % (len(names), nc, opt.data)  # check
 
     # Model
-    pretrained = weights.endswith('.pt')
+    # simmim_pretrained = opt.simmim_pretrained
+    pretrained = (weights.endswith('.pt') if opt.simmim_pretrained == False else weights.endswith('.pth'))
     down_factor = int(opt.train_img_size/opt.test_img_size)
     if pretrained:
+        # if simmim_pretrained:
+        #     ckpt = torch.load(weights, map_location=device)
+        #     model = build_model
         with torch_distributed_zero_first(rank):
             attempt_download(weights)  # download if not found locally
         ckpt = torch.load(weights, map_location=device)  # load checkpoint
         model = Model(opt.cfg or ckpt['model'].yaml,input_mode = opt.input_mode,ch_steam=opt.ch_steam, ch=opt.ch, nc=nc, anchors=hyp.get('anchors'),config=None,sr=opt.super,factor=down_factor).to(device)  # create
         exclude = ['anchor'] if (opt.cfg or hyp.get('anchors')) and not opt.resume else []  # exclude keys
-        state_dict = ckpt['model'].float().state_dict()  # to FP32
-        state_dict = intersect_dicts(state_dict, model.state_dict(), exclude=exclude)  # intersect
+        # state_dict = ckpt['model'].float().state_dict()  # to FP32
+        state_dict = intersect_dicts(ckpt['model'], model.state_dict(), exclude=exclude)  # intersect
         model.load_state_dict(state_dict, strict=False)  # load
         logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
     else:
@@ -168,7 +172,7 @@ def train(hyp, opt, device, tb_writer=None):
 
     # Resume
     start_epoch, best_fitness = 0, 0.0
-    if pretrained:
+    if pretrained and opt.simmim_pretrained == False: 
         # Optimizer
         if ckpt['optimizer'] is not None:
             optimizer.load_state_dict(ckpt['optimizer'])
@@ -197,7 +201,9 @@ def train(hyp, opt, device, tb_writer=None):
     # Image sizes
     gs = max(int(model.stride.max()), 32)  # grid size (max stride)
     nl = model.detect[-1].nl  # number of detection layers (used for scaling hyp['obj'])   #* changed model.model[-1]   to model.detect
-    imgsz, imgsz_test = [check_img_size(x, gs) for x in opt.img_size]  # verify imgsz are gs-multiples
+    # imgsz, imgsz_test = [check_img_size(x, gs) for x in opt.img_size]  # verify imgsz are gs-multiples
+    print(opt.img_size)
+    imgsz, imgsz_test = opt.img_size # verify imgsz are gs-multiples
 
     # DP mode
     if cuda and rank == -1 and torch.cuda.device_count() > 1:
@@ -599,11 +605,12 @@ def train(hyp, opt, device, tb_writer=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     #############################
+    parser.add_argument('--simmim_pretrained', default=False, help='Use simMIM or not')
     parser.add_argument('--weights', type=str, default='', help='initial weights path')
-    parser.add_argument('--cfg', type=str,default='codes/models/model.yaml', help='model.yaml path') #yolov5s
+    parser.add_argument('--cfg', type=str,default='models/model.yaml', help='model.yaml path') #yolov5s
     parser.add_argument('--super', default=False, action='store_true', help='super resolution')
-    parser.add_argument('--data', type=str,default='codes/models/data_vedai.yaml', help='data.yaml path')
-    parser.add_argument('--hyp', type=str, default='codes/models/hyp.scratchs.yaml', help='hyperparameters path')
+    parser.add_argument('--data', type=str,default='models/data_vedai.yaml', help='data.yaml path')
+    parser.add_argument('--hyp', type=str, default='models/hyp.scratchs.yaml', help='hyperparameters path')
     parser.add_argument('--epochs', type=int, default=300)
     parser.add_argument('--ch_steam', type=int, default=3)
     parser.add_argument('--ch', type=int,default=128, help = '3 4 16 midfusion1:64 midfusion2,3:128 midfusion4:256')  #*changed from default to match SAM

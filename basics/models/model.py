@@ -14,6 +14,9 @@ from .common import *
 # from models.swin_transformer import *
 from .experimental import *
 from .backbone_vit import *  #image_encoder_mL_1global_CF_v2_cross_alt_SCC
+# from .ringmo_framework.models.backbone.vit import vit_base_p16
+# from .ringmo_framework.tools import load_ckpt
+from .simMIM.build_simmim import build_model
 # from models.edsr import EDSR
 from ..utils.autoanchor import check_anchor_order
 from ..utils.general import make_divisible, check_file, set_logging
@@ -106,6 +109,9 @@ class Model(nn.Module):
         #self.model, self.save = parse_model(deepcopy(self.yaml),'backbone+head', ch=[ch],config=config)  # model, savelist   #* changed removed
         self.image_encoder, self.save1 = parse_model(deepcopy(self.yaml),'backbone', ch=[ch],config=config)   #*changed added to match SAM
         self.detect, self.save2 = parse_model(deepcopy(self.yaml),'head', ch=[ch],config=config)                #*changed added to match SAM
+        with open('basics/models/config/simmim/pr.yaml', 'r') as f:
+            cnfg = yaml.safe_load(f)
+        self.backbone = build_model(cnfg, is_pretrain=False)
         if self.sr == True:
             # from models.deeplab import DeepLab
             from models.deeplabedsr import DeepLab
@@ -233,7 +239,7 @@ class Model(nn.Module):
                 #y.append(x if m.i in self.save_steam else None)  # save output
             return x
         elif string == 'yolo': 
-            m = self.image_encoder
+            m = self.backbone
             if profile:
                      o = thop.profile(m, inputs=(x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPS
                      t = time_synchronized()
@@ -242,7 +248,7 @@ class Model(nn.Module):
                      dt.append((time_synchronized() - t) * 100)
                      print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
 
-            x = self.image_encoder(x)
+            x = self.backbone(x)
             y.extend(x)
             '''
             m = self.detect
@@ -275,7 +281,8 @@ class Model(nn.Module):
                         _ = m(x)
                     dt.append((time_synchronized() - t) * 100)
                     print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
-
+                print("LOG")
+                print(x.shape)
                 x = m(x)  # run
 
                 y.append(x)
