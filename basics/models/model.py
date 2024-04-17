@@ -7,23 +7,35 @@ from copy import deepcopy
 import scipy.io as sio
 from torch import mode
 import inspect
-sys.path.append('./')  # to run '$ python *.py' files in subdirectories
+
+sys.path.append("./")  # to run '$ python *.py' files in subdirectories
 logger = logging.getLogger(__name__)
 
 from .common import *
+
 # from models.swin_transformer import *
 from .experimental import *
-from .backbone_vit import *  #image_encoder_mL_1global_CF_v2_cross_alt_SCC
+from .backbone_vit import *  # image_encoder_mL_1global_CF_v2_cross_alt_SCC
+
 # from .ringmo_framework.models.backbone.vit import vit_base_p16
 # from .ringmo_framework.tools import load_ckpt
 from .simMIM.build_simmim import build_model
+
 # from models.edsr import EDSR
 from ..utils.autoanchor import check_anchor_order
 from ..utils.general import make_divisible, check_file, set_logging
-from ..utils.torch_utils import time_synchronized, fuse_conv_and_bn, model_info, scale_img, initialize_weights, \
-    select_device, copy_attr
+from ..utils.torch_utils import (
+    time_synchronized,
+    fuse_conv_and_bn,
+    model_info,
+    scale_img,
+    initialize_weights,
+    select_device,
+    copy_attr,
+)
 import scipy.io as sio
 import numpy
+
 # from models import build_model
 try:
     import thop  # for FLOPS computation
@@ -44,9 +56,13 @@ class Detect(nn.Module):
         self.na = len(anchors[0]) // 2  # number of anchors
         self.grid = [torch.zeros(1)] * self.nl  # init grid
         a = torch.tensor(anchors).float().view(self.nl, -1, 2)
-        self.register_buffer('anchors', a)  # shape(nl,na,2)
-        self.register_buffer('anchor_grid', a.clone().view(self.nl, 1, -1, 1, 1, 2))  # shape(nl,1,na,1,1,2)
-        self.m = nn.ModuleList(nn.Conv2d(x, self.no * self.na, 1) for x in ch)#.cuda()  # output conv       
+        self.register_buffer("anchors", a)  # shape(nl,na,2)
+        self.register_buffer(
+            "anchor_grid", a.clone().view(self.nl, 1, -1, 1, 1, 2)
+        )  # shape(nl,1,na,1,1,2)
+        self.m = nn.ModuleList(
+            nn.Conv2d(x, self.no * self.na, 1) for x in ch
+        )  # .cuda()  # output conv
 
     def forward(self, x):
         # x = x.copy()  # for profiling
@@ -55,15 +71,26 @@ class Detect(nn.Module):
         for i in range(self.nl):
             x[i] = self.m[i](x[i])  # conv
             bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
-            x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+            x[i] = (
+                x[i]
+                .view(bs, self.na, self.no, ny, nx)
+                .permute(0, 1, 3, 4, 2)
+                .contiguous()
+            )
 
             if not self.training:  # inference
                 if self.grid[i].shape[2:4] != x[i].shape[2:4]:
                     self.grid[i] = self._make_grid(nx, ny).to(x[i].device)
 
                 y = x[i].sigmoid()
-                y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + self.grid[i]) * self.stride[i]  # xy
-                y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
+                y[..., 0:2] = (
+                    y[..., 0:2] * 2.0 - 0.5 + self.grid[i]
+                ) * self.stride[
+                    i
+                ]  # xy
+                y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[
+                    i
+                ]  # wh
                 z.append(y.view(bs, -1, self.no))
         return x if self.training else (torch.cat(z, 1), x)
 
@@ -72,68 +99,104 @@ class Detect(nn.Module):
         yv, xv = torch.meshgrid([torch.arange(ny), torch.arange(nx)])
         return torch.stack((xv, yv), 2).view((1, 1, ny, nx, 2)).float()
 
-
 class Model(nn.Module):
     export = False  # onnx export
-    def __init__(self, cfg='yolov5s.yaml',input_mode='RGB',ch_steam=3, ch=3, nc=None, anchors=None,config=None,sr=False,factor=2):  #att=False,sr_att=False model, input channels, number of classes
+
+    def __init__(
+        self,
+        cfg="yolov5s.yaml",
+        input_mode="RGB",
+        ch_steam=3,
+        ch=3,
+        nc=None,
+        anchors=None,
+        config=None,
+        sr=False,
+        factor=2,
+        simMIM=False
+    ):  # att=False,sr_att=False model, input channels, number of classes
         super(Model, self).__init__()
         self.init_params = {
-            'cfg' : cfg,
-            'input_mode' : input_mode,
-            'ch_steam' : ch_steam,
-            'ch': ch,
-            'nc' : nc,
-            'anchors' : anchors,
-            'config' : config,
-            'sr' : sr,
-            'factor' : factor
+            "cfg": cfg,
+            "input_mode": input_mode,
+            "ch_steam": ch_steam,
+            "ch": ch,
+            "nc": nc,
+            "anchors": anchors,
+            "config": config,
+            "sr": sr,
+            "factor": factor,
+            "simMIM": simMIM,
         }
         if isinstance(cfg, dict):
             self.yaml = cfg  # model dict
         else:  # is *.yaml
             import yaml  # for torch hub
+
             self.yaml_file = Path(cfg).name
             with open(cfg) as f:
                 self.yaml = yaml.load(f, Loader=yaml.SafeLoader)  # model dict
         self.sr = sr
-        ch = self.yaml['ch'] = self.yaml.get('ch', ch)  # input channels
-        if nc and nc != self.yaml['nc']:
-            logger.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
-            self.yaml['nc'] = nc  # override yaml value
+        ch = self.yaml["ch"] = self.yaml.get("ch", ch)  # input channels
+        if nc and nc != self.yaml["nc"]:
+            logger.info(
+                f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}"
+            )
+            self.yaml["nc"] = nc  # override yaml value
         if anchors:
-            logger.info(f'Overriding model.yaml anchors with anchors={anchors}')
-            self.yaml['anchors'] = round(anchors)  # override yaml value
+            logger.info(
+                f"Overriding model.yaml anchors with anchors={anchors}"
+            )
+            self.yaml["anchors"] = round(anchors)  # override yaml value
         # self.input_mode = input_mode
-        if input_mode == 'RGB+IR+fusion':
-            self.steam, _ = parse_model(deepcopy(self.yaml),'steam', ch=[ch_steam],config=config)  # zjq model, savelist
-        #self.model, self.save = parse_model(deepcopy(self.yaml),'backbone+head', ch=[ch],config=config)  # model, savelist   #* changed removed
-        self.image_encoder, self.save1 = parse_model(deepcopy(self.yaml),'backbone', ch=[ch],config=config)   #*changed added to match SAM
-        self.detect, self.save2 = parse_model(deepcopy(self.yaml),'head', ch=[ch],config=config)                #*changed added to match SAM
-        with open('basics/models/config/simmim/pr.yaml', 'r') as f:
-            cnfg = yaml.safe_load(f)
-        self.backbone = build_model(cnfg, is_pretrain=False)
+        if input_mode == "RGB+IR+fusion":
+            self.steam, _ = parse_model(
+                deepcopy(self.yaml), "steam", ch=[ch_steam], config=config
+            )  # zjq model, savelist
+        # self.model, self.save = parse_model(deepcopy(self.yaml),'backbone+head', ch=[ch],config=config)  # model, savelist   #* changed removed
+        self.image_encoder, self.save1 = parse_model(
+            deepcopy(self.yaml), "backbone", ch=[ch], config=config
+        )  # *changed added to match SAM
+        self.detect, self.save2 = parse_model(
+            deepcopy(self.yaml), "head", ch=[ch], config=config
+        )  # *changed added to match SAM
+        if simMIM:
+            print("LOAD SIMMIM")
+            with open("basics/models/config/simmim/pr.yaml", "r") as f:
+                cnfg = yaml.safe_load(f)
+            simmim = build_model(cnfg, False)
+            # simmim = nn.Sequential(*list(simmim.children())[:-1])
+            self.image_encoder = simmim
         if self.sr == True:
             # from models.deeplab import DeepLab
             from models.deeplabedsr import DeepLab
-            if input_mode == 'IR' or input_mode == 'RGB':
-                self.model_up = DeepLab(3,self.yaml['c1'],self.yaml['c2'],factor=factor)#.cuda() #'if the size is m:192,768 l:256,1024 x:320 1280
+
+            if input_mode == "IR" or input_mode == "RGB":
+                self.model_up = DeepLab(
+                    3, self.yaml["c1"], self.yaml["c2"], factor=factor
+                )  # .cuda() #'if the size is m:192,768 l:256,1024 x:320 1280
             else:
-                self.model_up = DeepLab(4,self.yaml['c1'],self.yaml['c2'],factor=factor)#.cuda() #'if the size is m:192,768 l:256,1024 x:320 1280
-            self.l1=self.yaml['l1']
-            self.l2=self.yaml['l2']
-        
+                self.model_up = DeepLab(
+                    4, self.yaml["c1"], self.yaml["c2"], factor=factor
+                )  # .cuda() #'if the size is m:192,768 l:256,1024 x:320 1280
+            self.l1 = self.yaml["l1"]
+            self.l2 = self.yaml["l2"]
+
         # self.f1=self.yaml['f1']  #蒸馏特征层层数
         # self.f2=self.yaml['f2']
         # self.f3=self.yaml['f3']
 
-
         # Build strides, anchors
-        m = self.detect[-1]  # Detect()   #*changed self.model[-1] to self.detect
+        m = self.detect[
+            -1
+        ]  # Detect()   #*changed self.model[-1] to self.detect
         if isinstance(m, Detect):
             s = 256  # 2x min stride
-            #m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
-            
-            m.stride = torch.tensor([ 4.])#([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
+            # m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
+
+            m.stride = torch.tensor(
+                [4.0]
+            )  # ([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch_steam, s, s),torch.zeros(1, ch_steam, s, s),input_mode)[0]])  # forward
             m.anchors /= m.stride.view(-1, 1, 1)
             check_anchor_order(m)
             self.stride = m.stride
@@ -151,34 +214,44 @@ class Model(nn.Module):
         # Init weights, biases
         initialize_weights(self)
         self.info()
-        logger.info('')
-        
-    
-    def forward(self, x, ir=torch.randn(1,3,512,512), input_mode='RGB+IR', augment=False, profile=False):
+        logger.info("")
 
-        if input_mode=='RGB':
-            ir=x
+    def forward(
+        self,
+        x,
+        ir=torch.randn(1, 3, 512, 512),
+        input_mode="RGB+IR",
+        augment=False,
+        profile=False,
+    ):
+
+        if input_mode == "RGB":
+            ir = x
         if augment:
             img_size = x.shape[-2:]  # height, width
             s = [1, 0.83, 0.67]  # scales
             f = [None, 3, None]  # flips (2-ud, 3-lr)
             y = []  # outputs
             for si, fi in zip(s, f):
-                xi = scale_img(x.flip(fi) if fi else x, si, gs=int(self.stride.max()))
-                iri = scale_img(ir.flip(fi) if fi else ir, si, gs=int(self.stride.max()))
-                if input_mode =='RGB+IR+fusion':
-                    steam1 = self.forward_once(x,'steam',profile)
-                    steam2 = self.forward_once(ir,'steam',profile)
-                    steam = torch.cat([steam1,steam2],1)
-                if input_mode == 'RGB+IR':
-                    steam = torch.cat([xi,iri[:,0:1,:,:]],1)
-                if input_mode == 'RGB':
+                xi = scale_img(
+                    x.flip(fi) if fi else x, si, gs=int(self.stride.max())
+                )
+                iri = scale_img(
+                    ir.flip(fi) if fi else ir, si, gs=int(self.stride.max())
+                )
+                if input_mode == "RGB+IR+fusion":
+                    steam1 = self.forward_once(x, "steam", profile)
+                    steam2 = self.forward_once(ir, "steam", profile)
+                    steam = torch.cat([steam1, steam2], 1)
+                if input_mode == "RGB+IR":
+                    steam = torch.cat([xi, iri[:, 0:1, :, :]], 1)
+                if input_mode == "RGB":
                     steam = xi
-                if input_mode == 'IR':
-                    steam = iri#steam = iri[:,0:1,:,:]
-                if input_mode == 'RGB+IR+MF':
-                    steam = [x,ir[:,0:1,:,:]] #[:,0:1,:,:]
-                yi = self.forward_once(steam,'yolo')[0]  # forward
+                if input_mode == "IR":
+                    steam = iri  # steam = iri[:,0:1,:,:]
+                if input_mode == "RGB+IR+MF":
+                    steam = [x, ir[:, 0:1, :, :]]  # [:,0:1,:,:]
+                yi = self.forward_once(steam, "yolo")[0]  # forward
                 # yi = self.forward_once(xi)[0]  # forward
                 # cv2.imwrite('img%g.jpg' % s, 255 * xi[0].numpy().transpose((1, 2, 0))[:, :, ::-1])  # save
                 yi[..., :4] /= si  # de-scale
@@ -189,68 +262,84 @@ class Model(nn.Module):
                 y.append(yi)
             return torch.cat(y, 1), None  # augmented inference, train
         else:
-            if input_mode =='RGB+IR+fusion':
-                steam1 = self.forward_once(x,'steam',profile)
-                steam2 = self.forward_once(ir,'steam',profile)
-                steam = torch.cat([steam1,steam2],1)
+            if input_mode == "RGB+IR+fusion":
+                steam1 = self.forward_once(x, "steam", profile)
+                steam2 = self.forward_once(ir, "steam", profile)
+                steam = torch.cat([steam1, steam2], 1)
                 # sio.savemat('features/output.mat', mdict={'data':steam.cpu().numpy()})
-            if input_mode == 'RGB+IR':
-                steam = torch.cat([x,ir[:,0:1,:,:]],1)
-            if input_mode == 'RGB':
+            if input_mode == "RGB+IR":
+                steam = torch.cat([x, ir[:, 0:1, :, :]], 1)
+            if input_mode == "RGB":
                 steam = x
-            if input_mode == 'IR':
-                steam = ir#steam = ir[:,0:1,:,:]
-            if input_mode == 'RGB+IR+MF':
-                steam = [x,ir[:,0:1,:,:]] #[:,0:1,:,:]
-                
-            
+            if input_mode == "IR":
+                steam = ir  # steam = ir[:,0:1,:,:]
+            if input_mode == "RGB+IR+MF":
+                steam = [x, ir[:, 0:1, :, :]]  # [:,0:1,:,:]
+
             self.training |= self.export
-            if self.training==True:
+            if self.training == True:
                 if self.sr:
-                    y,output_sr,features = self.forward_once(steam,'yolo', profile) #zjq
-                    return y,output_sr,features
+                    y, output_sr, features = self.forward_once(
+                        steam, "yolo", profile
+                    )  # zjq
+                    return y, output_sr, features
                 else:
-                    y,features = self.forward_once(steam,'yolo', profile) #zjq
-                    return y,features
+                    y, features = self.forward_once(
+                        steam, "yolo", profile
+                    )  # zjq
+                    return y, features
             else:
-                y,features = self.forward_once(steam,'yolo', profile) #zjq
-                return y[0],y[1],features
+                y, features = self.forward_once(steam, "yolo", profile)  # zjq
+                return y[0], y[1], features
 
-
-
-
-    
     def forward_once(self, x, string, profile=False):
         y, dt = [], []  # outputs
-        if string == 'steam':
+        if string == "steam":
             for m in self.steam:
                 if m.f != -1:  # if not from previous layer
-                    x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
+                    x = (
+                        y[m.f]
+                        if isinstance(m.f, int)
+                        else [x if j == -1 else y[j] for j in m.f]
+                    )  # from earlier layers
 
                 if profile:
-                    o = thop.profile(m, inputs=(x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPS
+                    o = (
+                        thop.profile(m, inputs=(x,), verbose=False)[0]
+                        / 1e9
+                        * 2
+                        if thop
+                        else 0
+                    )  # FLOPS
                     t = time_synchronized()
                     for _ in range(10):
                         _ = m(x)
                     dt.append((time_synchronized() - t) * 100)
-                    print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
+                    print(
+                        "%10.1f%10.0f%10.1fms %-40s"
+                        % (o, m.np, dt[-1], m.type)
+                    )
 
                 x = m(x)  # run
-                #y.append(x if m.i in self.save_steam else None)  # save output
+                # y.append(x if m.i in self.save_steam else None)  # save output
             return x
-        elif string == 'yolo': 
-            m = self.backbone
+        elif string == "yolo":
+            m = self.image_encoder
             if profile:
-                     o = thop.profile(m, inputs=(x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPS
-                     t = time_synchronized()
-                     for _ in range(10):
-                         _ = m(x)
-                     dt.append((time_synchronized() - t) * 100)
-                     print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
-
-            x = self.backbone(x)
+                o = (
+                    thop.profile(m, inputs=(x,), verbose=False)[0] / 1e9 * 2
+                    if thop
+                    else 0
+                )  # FLOPS
+                t = time_synchronized()
+                for _ in range(10):
+                    _ = m(x)
+                dt.append((time_synchronized() - t) * 100)
+                print("%10.1f%10.0f%10.1fms %-40s" % (o, m.np, dt[-1], m.type))
+            x = self.image_encoder(x) # SimMIM => 2D
             y.extend(x)
-            '''
+            y = self.another_module(y)
+            """
             m = self.detect
             if profile:
                      o = thop.profile(m, inputs=(x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPS
@@ -269,64 +358,95 @@ class Model(nn.Module):
                          _ = m(x)
                      dt.append((time_synchronized() - t) * 100)
                      print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
-            '''
+            """
 
             for m in self.detect:
                 if m.f != -1:  # if not from previous layer
-                    x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
+                    x = (
+                        y[m.f]
+                        if isinstance(m.f, int)
+                        else [x if j == -1 else y[j] for j in m.f]
+                    )  # from earlier layers
                 if profile:
-                    o = thop.profile(m, inputs=(x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPS
+                    o = (
+                        thop.profile(m, inputs=(x,), verbose=False)[0]
+                        / 1e9
+                        * 2
+                        if thop
+                        else 0
+                    )  # FLOPS
                     t = time_synchronized()
                     for _ in range(10):
                         _ = m(x)
                     dt.append((time_synchronized() - t) * 100)
-                    print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
-                print("LOG")
-                print(x.shape)
+                    print(
+                        "%10.1f%10.0f%10.1fms %-40s"
+                        % (o, m.np, dt[-1], m.type)
+                    )
                 x = m(x)  # run
 
                 y.append(x)
-                
 
             # for feature in y[:-1]:
             #     print((torch.numel(feature)-torch.count_nonzero(feature))/torch.numel(feature))
 
-
             self.training |= self.export
-            if self.training==True:
+            if self.training == True:
                 if self.sr:
-                    output_sr = self.model_up(y[self.l1],y[self.l2]) #在超分上加attention    
-                    return x,output_sr,y#(y[self.f1],y[self.f2],y[self.f3])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])
+                    output_sr = self.model_up(
+                        y[self.l1], y[self.l2]
+                    )  # 在超分上加attention
+                    return (
+                        x,
+                        output_sr,
+                        y,
+                    )  # (y[self.f1],y[self.f2],y[self.f3])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])
                 else:
-                    return x,y#(y[self.f1],y[self.f2],y[self.f3])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])
+                    return (
+                        x,
+                        y,
+                    )  # (y[self.f1],y[self.f2],y[self.f3])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])
             else:
-                return x,y#(y[17],y[20],y[23])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])(y[-4],y[-3],y[-2])
+                return (
+                    x,
+                    y,
+                )  # (y[17],y[20],y[23])#(y[4],y[8],y[18],y[21],y[24])#(y[7],y[15],y[-2])(y[-4],y[-3],y[-2])
 
-
-    def _initialize_biases(self, cf=None):  # initialize biases into Detect(), cf is class frequency
+    def _initialize_biases(
+        self, cf=None
+    ):  # initialize biases into Detect(), cf is class frequency
         # https://arxiv.org/abs/1708.02002 section 3.3
         # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1.
-        m = self.detect[-1]  # Detect() module   #*changed self.model[-1] to self.detect
-        for mi, s in zip(m.m, m.stride):  # from    
+        m = self.detect[
+            -1
+        ]  # Detect() module   #*changed self.model[-1] to self.detect
+        for mi, s in zip(m.m, m.stride):  # from
             b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
-            b.data[:, 4] += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
-            b.data[:, 5:] += math.log(0.6 / (m.nc - 0.99)) if cf is None else torch.log(cf / cf.sum())  # cls
+            b.data[:, 4] += math.log(
+                8 / (640 / s) ** 2
+            )  # obj (8 objects per 640 image)
+            b.data[:, 5:] += (
+                math.log(0.6 / (m.nc - 0.99))
+                if cf is None
+                else torch.log(cf / cf.sum())
+            )  # cls
             mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
 
     def _print_biases(self):
         m = self.model[-1]  # Detect() module
         for mi in m.m:  # from
             b = mi.bias.detach().view(m.na, -1).T  # conv.bias(255) to (3,85)
-            print(('%6g Conv2d.bias:' + '%10.3g' * 6) % (mi.weight.shape[1], *b[:5].mean(1).tolist(), b[5:].mean()))
-
-
+            print(
+                ("%6g Conv2d.bias:" + "%10.3g" * 6)
+                % (mi.weight.shape[1], *b[:5].mean(1).tolist(), b[5:].mean())
+            )
 
     def fuse(self):  # fuse model Conv2d() + BatchNorm2d() layers
-        print('Fusing layers... ')
-        for m in self.modules(): ##self.model.modules
-            if (type(m) is Conv) and hasattr(m, 'bn'):
+        print("Fusing layers... ")
+        for m in self.modules():  ##self.model.modules
+            if (type(m) is Conv) and hasattr(m, "bn"):
                 m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv
-                delattr(m, 'bn')  # remove batchnorm
+                delattr(m, "bn")  # remove batchnorm
                 m.forward = m.fuseforward  # update forward
         self.info()
         return self
@@ -334,44 +454,60 @@ class Model(nn.Module):
     def nms(self, mode=True):  # add or remove NMS module
         present = type(self.model[-1]) is NMS  # last layer is NMS
         if mode and not present:
-            print('Adding NMS... ')
+            print("Adding NMS... ")
             m = NMS()  # module
             m.f = -1  # from
             m.i = self.model[-1].i + 1  # index
-            self.model.add_module(name='%s' % m.i, module=m)  # add
+            self.model.add_module(name="%s" % m.i, module=m)  # add
             self.eval()
         elif not mode and present:
-            print('Removing NMS... ')
+            print("Removing NMS... ")
             self.model = self.model[:-1]  # remove
         return self
 
     def autoshape(self):  # add autoShape module
-        print('Adding autoShape... ')
+        print("Adding autoShape... ")
         m = autoShape(self)  # wrap model
-        copy_attr(m, self, include=('yaml', 'nc', 'hyp', 'names', 'stride'), exclude=())  # copy attributes
+        copy_attr(
+            m,
+            self,
+            include=("yaml", "nc", "hyp", "names", "stride"),
+            exclude=(),
+        )  # copy attributes
         return m
 
     def info(self, verbose=False, img_size=640):  # print model information
         model_info(self, verbose, img_size)
 
-def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
-    logger.info('\n%3s%18s%3s%10s  %-40s%-30s' % ('', 'from', 'n', 'params', 'module', 'arguments'))
-    anchors, nc, gd, gw = d['anchors'], d['nc'], d['depth_multiple'], d['width_multiple']
-    na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors
+
+def parse_model(d, string, ch, config):  # model_dict, input_channels(3)
+    logger.info(
+        "\n%3s%18s%3s%10s  %-40s%-30s"
+        % ("", "from", "n", "params", "module", "arguments")
+    )
+    anchors, nc, gd, gw = (
+        d["anchors"],
+        d["nc"],
+        d["depth_multiple"],
+        d["width_multiple"],
+    )
+    na = (
+        (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors
+    )  # number of anchors
     no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
 
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
     i_shoud_add = 0
 
-    stri = string.split('+')
-    if len(stri)==2:
+    stri = string.split("+")
+    if len(stri) == 2:
         string_1 = stri[0]
         string_2 = stri[1]
         d_ = d[string_1] + d[string_2]
-        save.extend([2,4,5,6,8,9]) #save some layer of backbone
+        save.extend([2, 4, 5, 6, 8, 9])  # save some layer of backbone
     else:
         d_ = d[stri[-1]]
-    if string == 'head':
+    if string == "head":
         ch[0] = 256
         ch.append(256)
         ch.append(512)
@@ -384,7 +520,21 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
                 pass
 
         n = max(round(n * gd), 1) if n > 1 else n  # depth gain
-        if m in [Conv, ACmix, Bottleneck, SPP, DWConv, MixConv2d, Focus, CrossConv, BottleneckCSP, BottleneckCSP2, SPPCSP, C3, AttentionModel]:
+        if m in [
+            Conv,
+            ACmix,
+            Bottleneck,
+            SPP,
+            DWConv,
+            MixConv2d,
+            Focus,
+            CrossConv,
+            BottleneckCSP,
+            BottleneckCSP2,
+            SPPCSP,
+            C3,
+            AttentionModel,
+        ]:
             c1, c2 = ch[f], args[0]
 
             # Normal
@@ -406,19 +556,21 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
             #     c2 = make_divisible(c2, 8) if c2 != no else c2
 
             args = [c1, c2, *args[1:]]
-            if m in [BottleneckCSP, C3,BottleneckCSP2, SPPCSP]:
+            if m in [BottleneckCSP, C3, BottleneckCSP2, SPPCSP]:
                 args.insert(2, n)
                 n = 1
         elif m is nn.BatchNorm2d:
             args = [ch[f]]
-        elif m is Concat:# or m is SAM:
-            c2 = sum([ch[x if x < 0 else x] for x in f]) #**removed +1 before x +1
+        elif m is Concat:  # or m is SAM:
+            c2 = sum(
+                [ch[x if x < 0 else x] for x in f]
+            )  # **removed +1 before x +1
         elif m is Detect:
-            args.append([ch[x] for x in f])   #*changed removed + 1
+            args.append([ch[x] for x in f])  # *changed removed + 1
             if isinstance(args[1], int):  # number of anchors
                 args[1] = [list(range(args[1] * 2))] * len(f)
             print(*args)
-            
+
         elif m is Contract:
             c2 = ch[f if f < 0 else f + 1] * args[0] ** 2
         elif m is Expand:
@@ -426,18 +578,42 @@ def parse_model(d, string, ch,config):  # model_dict, input_channels(3)
         else:
             c2 = ch[f if f < 0 else f + 1]
 
-        if string == 'backbone':
-            m_ = m(img_size = args[0], patch_size=4, embed_dim= args[2], in_chans= args[3], out_chans=args[4], window_size= args[5])
+        if string == "backbone":
+            m_ = m(
+                img_size=args[0],
+                patch_size=4,
+                embed_dim=args[2],
+                in_chans=args[3],
+                out_chans=args[4],
+                window_size=args[5],
+            )
         else:
-            m_ = nn.Sequential(*[m(*args) for _ in range(n)]) if n > 1 else m(*args)  # module
-        t = str(m)[8:-2].replace('__main__.', '')  # module type
+            m_ = (
+                nn.Sequential(*[m(*args) for _ in range(n)])
+                if n > 1
+                else m(*args)
+            )  # module
+        t = str(m)[8:-2].replace("__main__.", "")  # module type
         np = sum([x.numel() for x in m_.parameters()])  # number params
-        m_.i, m_.f, m_.type, m_.np = i+i_shoud_add, f, t, np  # attach index, 'from' index, type, number params
-        logger.info('%3s%18s%3s%10.0f  %-40s%-30s' % (i+i_shoud_add, f, n, np, t, args))  # print
-        save.extend(x % (i+i_shoud_add+0.00001) for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
+        m_.i, m_.f, m_.type, m_.np = (
+            i + i_shoud_add,
+            f,
+            t,
+            np,
+        )  # attach index, 'from' index, type, number params
+        logger.info(
+            "%3s%18s%3s%10.0f  %-40s%-30s"
+            % (i + i_shoud_add, f, n, np, t, args)
+        )  # print
+        save.extend(
+            x % (i + i_shoud_add + 0.00001)
+            for x in ([f] if isinstance(f, int) else f)
+            if x != -1
+        )  # append to savelist
         layers.append(m_)
         ch.append(c2)
-    if string == 'backbone':
-        return layers[0], sorted(save) #*changed  nn.Sequential(*layers) to layers[0]
+    if string == "backbone":
+        return layers[0], sorted(
+            save
+        )  # *changed  nn.Sequential(*layers) to layers[0]
     return nn.Sequential(*layers), sorted(save)
-

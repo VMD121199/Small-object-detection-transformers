@@ -268,7 +268,6 @@ class SwinTransformerBlock(nn.Module):
         # FFN
         x = shortcut + self.drop_path(x)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
-
         return x
 
     def extra_repr(self) -> str:
@@ -383,7 +382,6 @@ class BasicLayer(nn.Module):
             for i in range(depth)])
 
         # patch merging layer
-        print("input_resolution", input_resolution)
         if downsample is not None:
             self.downsample = downsample(input_resolution, dim=dim, norm_layer=norm_layer)
         else:
@@ -486,7 +484,7 @@ class SwinTransformer(nn.Module):
         use_checkpoint (bool): Whether to use checkpointing to save memory. Default: False
     """
 
-    def __init__(self, img_size=224, patch_size=4, in_chans=3, num_classes=1000,
+    def __init__(self, img_size=224, patch_size=4, in_chans=3, num_classes=8,
                  embed_dim=96, depths=[2, 2, 6, 2], num_heads=[3, 6, 12, 24],
                  window_size=7, mlp_ratio=4., qkv_bias=True, qk_scale=None,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0.1,
@@ -507,13 +505,11 @@ class SwinTransformer(nn.Module):
         self.mlp_ratio = mlp_ratio
 
         # split image into non-overlapping patches
-        # print("img_size", img_size)
         self.patch_embed = PatchEmbed(
             img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
             norm_layer=norm_layer if self.patch_norm else None)
         num_patches = self.patch_embed.num_patches
         patches_resolution = self.patch_embed.patches_resolution
-        # print("patches_resolution", patches_resolution)
         self.patches_resolution = patches_resolution
 
         # absolute position embedding
@@ -529,8 +525,6 @@ class SwinTransformer(nn.Module):
         # build layers
         self.layers = nn.ModuleList()
         for i_layer in range(self.num_layers):
-            print(patches_resolution)
-            print(patches_resolution[0] // (2 ** i_layer), patches_resolution[1] // (2 ** i_layer))
             layer = BasicLayer(dim=int(embed_dim * 2 ** i_layer),
                                input_resolution=(patches_resolution[0] // (2 ** i_layer),
                                                  patches_resolution[1] // (2 ** i_layer)),
@@ -573,19 +567,22 @@ class SwinTransformer(nn.Module):
         x = self.patch_embed(x)
         if self.ape:
             x = x + self.absolute_pos_embed
-        x = self.pos_drop(x)
-
-        for layer in self.layers:
+        x = self.pos_drop(x) 
+        out = []
+        for i, layer in enumerate(self.layers):
             x = layer(x)
-
+            if i in (0, 1, 3):
+                if i ==3:
+                    x = self.norm(x)
+                out.append(x)
         x = self.norm(x)  # B L C
-        x = self.avgpool(x.transpose(1, 2))  # B C 1
-        x = torch.flatten(x, 1)
-        return x
+        # x = self.avgpool(x.transpose(1, 2))  # B C 1
+        # x = torch.flatten(x, 1)
+        return out
 
     def forward(self, x):
         x = self.forward_features(x)
-        x = self.head(x)
+        # x = self.head(x)
         return x
 
     def flops(self):
