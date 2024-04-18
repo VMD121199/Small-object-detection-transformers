@@ -99,6 +99,7 @@ class Detect(nn.Module):
         yv, xv = torch.meshgrid([torch.arange(ny), torch.arange(nx)])
         return torch.stack((xv, yv), 2).view((1, 1, ny, nx, 2)).float()
 
+
 class Model(nn.Module):
     export = False  # onnx export
 
@@ -113,7 +114,7 @@ class Model(nn.Module):
         config=None,
         sr=False,
         factor=2,
-        simMIM=False
+        simMIM=False,
     ):  # att=False,sr_att=False model, input channels, number of classes
         super(Model, self).__init__()
         self.init_params = {
@@ -336,9 +337,18 @@ class Model(nn.Module):
                     _ = m(x)
                 dt.append((time_synchronized() - t) * 100)
                 print("%10.1f%10.0f%10.1fms %-40s" % (o, m.np, dt[-1], m.type))
-            x = self.image_encoder(x) # SimMIM => 2D
+            x = self.image_encoder(x) 
+            tensors = []
+            for tensor in x:
+                sqrt_dim = int(math.sqrt(tensor.shape[1]))
+                tensor = tensor.view(
+                    [tensor.shape[0], tensor.shape[2], sqrt_dim, sqrt_dim]
+                )
+                tensors.append(tensor)
+            x = tensors
+            # breakpoint()
             y.extend(x)
-            y = self.another_module(y)
+            # y = self.another_module(y)
             """
             m = self.detect
             if profile:
@@ -359,7 +369,6 @@ class Model(nn.Module):
                      dt.append((time_synchronized() - t) * 100)
                      print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
             """
-
             for m in self.detect:
                 if m.f != -1:  # if not from previous layer
                     x = (
@@ -383,6 +392,7 @@ class Model(nn.Module):
                         "%10.1f%10.0f%10.1fms %-40s"
                         % (o, m.np, dt[-1], m.type)
                     )
+                breakpoint()
                 x = m(x)  # run
 
                 y.append(x)
@@ -508,9 +518,10 @@ def parse_model(d, string, ch, config):  # model_dict, input_channels(3)
     else:
         d_ = d[stri[-1]]
     if string == "head":
-        ch[0] = 256
-        ch.append(256)
-        ch.append(512)
+        ch[0] = 384
+        ch.append(768)
+        ch.append(1536)
+        ch.append(1536)
     for i, (f, n, m, args) in enumerate(d_):  # from, number, module, args
         m = eval(m) if isinstance(m, str) else m  # eval strings
         for j, a in enumerate(args):

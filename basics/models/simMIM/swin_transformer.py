@@ -568,11 +568,11 @@ class SwinTransformer(nn.Module):
         if self.ape:
             x = x + self.absolute_pos_embed
         x = self.pos_drop(x) 
-        out = []
+        out = [x]
         for i, layer in enumerate(self.layers):
             x = layer(x)
             if i in (0, 1, 3):
-                if i ==3:
+                if i == 3:
                     x = self.norm(x)
                 out.append(x)
         x = self.norm(x)  # B L C
