@@ -15,7 +15,7 @@ from .common import *
 
 # from models.swin_transformer import *
 from .experimental import *
-from .backbone_vit import *  # image_encoder_mL_1global_CF_v2_cross_alt_SCC
+from .backbone_vit import *  # encoder_mL_1global_CF_v2_cross_alt_SCC
 
 # from .ringmo_framework.models.backbone.vit import vit_base_p16
 # from .ringmo_framework.tools import load_ckpt
@@ -155,7 +155,7 @@ class Model(nn.Module):
                 deepcopy(self.yaml), "steam", ch=[ch_steam], config=config
             )  # zjq model, savelist
         # self.model, self.save = parse_model(deepcopy(self.yaml),'backbone+head', ch=[ch],config=config)  # model, savelist   #* changed removed
-        self.image_encoder, self.save1 = parse_model(
+        self.encoder, self.save1 = parse_model(
             deepcopy(self.yaml), "backbone", ch=[ch], config=config
         )  # *changed added to match SAM
         self.detect, self.save2 = parse_model(
@@ -167,7 +167,7 @@ class Model(nn.Module):
                 cnfg = yaml.safe_load(f)
             simmim = build_model(cnfg, False)
             # simmim = nn.Sequential(*list(simmim.children())[:-1])
-            self.image_encoder = simmim
+            self.encoder = simmim.cuda()
         if self.sr == True:
             # from models.deeplab import DeepLab
             from models.deeplabedsr import DeepLab
@@ -325,7 +325,7 @@ class Model(nn.Module):
                 # y.append(x if m.i in self.save_steam else None)  # save output
             return x
         elif string == "yolo":
-            m = self.image_encoder
+            m = self.encoder
             if profile:
                 o = (
                     thop.profile(m, inputs=(x,), verbose=False)[0] / 1e9 * 2
@@ -337,7 +337,7 @@ class Model(nn.Module):
                     _ = m(x)
                 dt.append((time_synchronized() - t) * 100)
                 print("%10.1f%10.0f%10.1fms %-40s" % (o, m.np, dt[-1], m.type))
-            x = self.image_encoder(x) 
+            x = self.encoder(x)
             tensors = []
             for tensor in x:
                 sqrt_dim = int(math.sqrt(tensor.shape[1]))
@@ -346,7 +346,6 @@ class Model(nn.Module):
                 )
                 tensors.append(tensor)
             x = tensors
-            # breakpoint()
             y.extend(x)
             # y = self.another_module(y)
             """
@@ -392,7 +391,6 @@ class Model(nn.Module):
                         "%10.1f%10.0f%10.1fms %-40s"
                         % (o, m.np, dt[-1], m.type)
                     )
-                breakpoint()
                 x = m(x)  # run
 
                 y.append(x)
@@ -518,10 +516,13 @@ def parse_model(d, string, ch, config):  # model_dict, input_channels(3)
     else:
         d_ = d[stri[-1]]
     if string == "head":
-        ch[0] = 384
-        ch.append(768)
-        ch.append(1536)
-        ch.append(1536)
+        ch[0] = 128
+        ch.append(256)
+        ch.append(512)
+        ch.append(1024)
+        # ch[0] = 256
+        # ch.append(256)
+        # ch.append(512)
     for i, (f, n, m, args) in enumerate(d_):  # from, number, module, args
         m = eval(m) if isinstance(m, str) else m  # eval strings
         for j, a in enumerate(args):

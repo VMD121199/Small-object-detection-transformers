@@ -311,7 +311,6 @@ class PatchMerging(nn.Module):
         """
         H, W = self.input_resolution
         B, L, C = x.shape
-        print(H, W)
         assert L == H * W, "input feature has wrong size"
         assert H % 2 == 0 and W % 2 == 0, f"x size ({H}*{W}) are not even."
 
@@ -425,7 +424,6 @@ class PatchEmbed(nn.Module):
         img_size = to_2tuple(img_size)
         patch_size = to_2tuple(patch_size)
         patches_resolution = [img_size[0] // patch_size[0], img_size[1] // patch_size[1]]
-        print(img_size, patch_size)
         self.img_size = img_size
         self.patch_size = patch_size
         self.patches_resolution = patches_resolution
@@ -525,6 +523,10 @@ class SwinTransformer(nn.Module):
         # build layers
         self.layers = nn.ModuleList()
         for i_layer in range(self.num_layers):
+            # print(i_layer)
+            # print(int(embed_dim * 2 ** i_layer))
+            # print((patches_resolution[0] // (2 ** i_layer),
+            #                                      patches_resolution[1] // (2 ** i_layer)))
             layer = BasicLayer(dim=int(embed_dim * 2 ** i_layer),
                                input_resolution=(patches_resolution[0] // (2 ** i_layer),
                                                  patches_resolution[1] // (2 ** i_layer)),
@@ -564,6 +566,7 @@ class SwinTransformer(nn.Module):
         return {'relative_position_bias_table'}
 
     def forward_features(self, x):
+        # print(x.shape)
         x = self.patch_embed(x)
         if self.ape:
             x = x + self.absolute_pos_embed
@@ -599,7 +602,7 @@ def build_swin(config):
     model = SwinTransformer(
         img_size=config.DATA.IMG_SIZE,
         patch_size=config.MODEL.SWIN.PATCH_SIZE,
-        # in_chans=config.MODEL.SWIN.IN_CHANS,
+        in_chans=config.MODEL.SWIN.IN_CHANS,
         # num_classes=config.MODEL.NUM_CLASSES,
         embed_dim=config.MODEL.SWIN.EMBED_DIM,
         depths=config.MODEL.SWIN.DEPTHS,
@@ -610,7 +613,7 @@ def build_swin(config):
         # qk_scale=config.MODEL.SWIN.QK_SCALE,
         # drop_rate=config.MODEL.DROP_RATE,
         drop_path_rate=config.MODEL.DROP_PATH_RATE,
-        # ape=config.MODEL.SWIN.APE,
+        ape=config.MODEL.SWIN.APE,
         # patch_norm=config.MODEL.SWIN.PATCH_NORM,
         # use_checkpoint=config.TRAIN.USE_CHECKPOINT)
     )
